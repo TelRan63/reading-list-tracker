@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: Reading List Tracker API
+  version: 1.0.0
+  description: >
+    REST API for one shared reading list (no sign-in). This file is the design contract for
+    feature 001-book-reading-list. Implementation copies it to packages/shared/openapi.yaml,
+    which then becomes the living source of truth.
+servers:
+  - url: /api
+paths:
+  /books:
+    get:
+      operationId: listBooks
+      summary: List books, newest first, optionally filtered by status.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Return only books with this status. Omit to return all books.
+          schema:
+            $ref: '#/components/schemas/BookStatus'
+      responses:
+        '200':
+          description: Books ordered by createdAt descending (then id descending).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      operationId: createBook
+      summary: Add a book to the reading list.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookRequest'
+      responses:
+        '201':
+          description: The created book.
+          headers:
+            Location:
+              description: URL of the created book resource.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /books/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          $ref: '#/components/schemas/BookId'
+    patch:
+      operationId: updateBookStatus
+      summary: Change the status of a book. Title and author cannot be changed here.
+      description: >
+        Last saved change wins (no version check). Setting the current status again returns 200
+        with the unchanged book.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateBookStatusRequest'
+      responses:
+        '200':
+          description: The updated book.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          description: No book with this id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                code: BOOK_NOT_FOUND
+                message: Книга не найдена.
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  schemas:
+    BookId:
+      type: string
+      pattern: '^[0-9a-f]{24}$'
+      description: MongoDB ObjectId as 24 lowercase hexadecimal characters.
+      example: 6743a1f2c9e77b0012a4d5e1
+    BookStatus:
+      type: string
+      enum: [want_to_read, reading, read]
+      description: >
+        want_to_read = "Хочу прочитать", reading = "Читаю", read = "Прочитано".
+    Book:
+      type: object
+      additionalProperties: false
+      required: [id, title, author, status, createdAt, updatedAt]
+      properties:
+        id:
+          $ref: '#/components/schemas/BookId'
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        author:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          $ref: '#/components/schemas/BookStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        id: 6743a1f2c9e77b0012a4d5e1
+        title: Мастер и Маргарита
+        author: Михаил Булгаков
+        status: want_to_read
+        createdAt: '2026-11-24T10:15:00.000Z'
+        updatedAt: '2026-11-24T10:15:00.000Z'
+    BookList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Book'
+    CreateBookRequest:
+      type: object
+      additionalProperties: false
+      required: [title, author]
+      description: >
+        Leading and trailing spaces are removed before the length rules are applied, so the
+        server enforces 1-200 (title) and 1-100 (author) characters after trimming. The raw
+        maxLength values below allow for surrounding spaces.
+      properties:
+        title:
+          type: string
+          pattern: '\S'
+          maxLength: 1000
+        author:
+          type: string
+          pattern: '\S'
+          maxLength: 1000
+        status:
+          $ref: '#/components/schemas/BookStatus'
+          description: Defaults to want_to_read when omitted.
+      example:
+        title: Мастер и Маргарита
+        author: Михаил Булгаков
+        status: want_to_read
+    UpdateBookStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          $ref: '#/components/schemas/BookStatus'
+      example:
+        status: reading
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required: [field, message]
+      properties:
+        field:
+          type: string
+          description: Name of the request field the error is about (for example, title).
+        message:
+          type: string
+          description: Human-readable message in Russian, shown next to the field.
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [VALIDATION_ERROR, BOOK_NOT_FOUND, INTERNAL_ERROR]
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+  responses:
+    ValidationError:
+      description: The request does not match the contract or breaks a business rule.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: VALIDATION_ERROR
+            message: Проверьте введённые данные.
+            details:
+              - field: title
+                message: Укажите название книги.
+    InternalError:
+      description: Unexpected server error. No internal details are returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: INTERNAL_ERROR
+            message: Что-то пошло не так. Попробуйте ещё раз.
